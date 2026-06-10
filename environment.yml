@@ -1,0 +1,14 @@
+name: trodes-events
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - shapely          # point-in-polygon math (pulls in the GEOS C library)
+  - pip
+  - pip:
+      # Editable install of this project. Brings in trodesnetwork, pyzmq and
+      # msgpack (declared in pyproject.toml) and installs the console scripts
+      # hex-tracker, hex-tracker-gui and trodes-events.
+      - -e .
+# Note: tkinter (used by the GUI) ships with conda's Python, so it needs no
+# entry here.

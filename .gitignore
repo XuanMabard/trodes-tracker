@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Data files (commit these deliberately if you want them tracked)
+*.trackgeometry

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trodes-tracker"
+version = "0.1.0"
+description = "Real-time hexagon position tracking and event reading from the Trodes network."
+requires-python = ">=3.10"
+dependencies = [
+    "trodesnetwork",  # talks to the Trodes network (source.position, source.event)
+    "pyzmq",          # ZMQ transport used by trodesnetwork
+    "msgpack",        # message (de)serialization used by trodesnetwork
+    "shapely",        # point-in-polygon math (also available from conda-forge)
+]
+
+[project.scripts]
+hex-tracker = "trodes_tracker.cli:main"
+hex-tracker-gui = "trodes_tracker.gui:main"
+trodes-events = "trodes_tracker.events:main"
+
+[tool.setuptools]
+packages = ["trodes_tracker"]
