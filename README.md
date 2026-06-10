@@ -66,6 +66,28 @@ Without installing, from the project root:
 python -m trodes_tracker.cli PATH_TO.trackgeometry -W 640 -H 480
 ```
 
+Each output line leads with the MCU sample count (the synchronization key) and a
+client wall-clock:
+
+```
+sample=1000  recv=2026-06-10 15:36:05.534305 (unix_ns=1781130965534304784) | x=320.00 y=240.00   -->   hexagon 7
+```
+
+- **`sample`** — the **MCU hardware sample count** (`timestamp` in the Trodes
+  position message). The MCU stamps this *same* counter onto the neural streams
+  (their `localTimestamp`), so equal sample counts mean the same instant. **This
+  is the time that comes from the MCU and the correct key for aligning position
+  with neural data.** To turn it into seconds you need the acquisition sample
+  rate and an anchor from the recording side; the position channel alone does not
+  expose a sample-count→Unix mapping.
+- **`recv` / `tsys`** (wall-clock) — a convenience timestamp for human reading and
+  logging, **not** MCU time. It is `time.time_ns()` captured on this client the
+  instant the sample arrives (`recv`), or — only if a given Trodes build puts a
+  `systemTimestamp` in the position message — the recording computer's processing
+  time (`tsys`). Both are *downstream* of the MCU (network + processing latency),
+  so do not use them as the neural-alignment key. The startup banner reports
+  which one is in use.
+
 ### Position / hexagon tracker (GUI)
 
 ```bash
