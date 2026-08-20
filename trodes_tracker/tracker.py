@@ -15,19 +15,13 @@ The position from Trodes ``source.position`` is in PIXELS, so ``width`` and
 them into the 0-1 space the ``.trackgeometry`` vertices are stored in.
 """
 
-from datetime import datetime
-
 from . import geometry
 from . import trodes_io
+from .trodes_io import format_unix_ns
 
 
 class GeometryError(Exception):
     """Raised when a .trackgeometry file yields no usable zones."""
-
-
-def format_unix_ns(unix_ns):
-    """Human-readable local time (to microseconds) for a Unix nanosecond value."""
-    return datetime.fromtimestamp(unix_ns / 1e9).strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 def run(geometry_path, width, height, server=trodes_io.DEFAULT_SERVER, out=print):

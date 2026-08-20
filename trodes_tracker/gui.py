@@ -2,27 +2,34 @@
 """
 gui.py
 
-A small Tkinter desktop front-end for the hexagon position tracker.
+A small Tkinter desktop front-end for the Trodes tracking tools.
 
 It lets you:
-  - Load a .trackgeometry file with a file picker
-  - Type the camera width and height (pixels)
-  - Click "Start" to run the tracker and watch its output live
+  - Pick a mode:
+      * Position tracker -- stream x,y positions and do zone detection locally
+        with shapely against a .trackgeometry file
+      * Trodes events -- just listen to the Trodes event bus; zone detection
+        happens inside the Trodes Camera Module (zones configured there fire
+        named events)
+  - Load a .trackgeometry file with a file picker (position mode only)
+  - Type the camera width and height in pixels (position mode only)
+  - Click "Start" to run the chosen mode and watch its output live
   - Click "Stop" to end it
 
-The GUI launches the tracker as a separate process -- ``python -m
-trodes_tracker.cli`` using the same interpreter the GUI is running under, so it
-stays inside your conda environment -- and streams whatever the tracker prints.
-Running it out-of-process keeps the GUI responsive and lets "Stop" cleanly
-terminate the tracker.
+The GUI launches the worker as a separate process -- ``python -m
+trodes_tracker.cli`` or ``python -m trodes_tracker.events`` using the same
+interpreter the GUI is running under, so it stays inside your conda
+environment -- and streams whatever the worker prints. Running it
+out-of-process keeps the GUI responsive and lets "Stop" cleanly terminate it.
 
 Run it with:
     python -m trodes_tracker            # this GUI (see __main__.py)
     python -m trodes_tracker.gui
     hex-tracker-gui                     # once installed
 
-Requirements: tkinter (standard library). The tracker it runs still needs
-trodesnetwork, pyzmq, msgpack, and shapely installed.
+Requirements: tkinter (standard library). The workers it runs still need
+trodesnetwork, pyzmq, and msgpack installed; the position tracker additionally
+needs shapely.
 """
 
 import os
@@ -79,6 +86,15 @@ def build_command(python_exe, geometry_path, width, height, server):
     return cmd
 
 
+def build_events_command(python_exe, server):
+    """Assemble the command line that runs the Trodes event listener module,
+    unbuffered (-u) so its output streams line-by-line into the GUI."""
+    cmd = [python_exe, "-u", "-m", "trodes_tracker.events"]
+    if server:
+        cmd += ["--server", server]
+    return cmd
+
+
 def subprocess_env():
     """Environment for the tracker subprocess, with the project root on
     PYTHONPATH so ``-m trodes_tracker.cli`` resolves even when the package
@@ -114,31 +130,48 @@ class HexTrackerGUI:
         frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
 
+        # --- Mode row ---
+        self.mode_var = tk.StringVar(value="position")
+        mode_frm = ttk.Frame(frm)
+        mode_frm.grid(row=0, column=0, columnspan=3, sticky="w", **pad)
+        ttk.Label(mode_frm, text="Mode:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Radiobutton(
+            mode_frm, text="Position tracker (local zone detection)",
+            variable=self.mode_var, value="position",
+            command=self._on_mode_change).grid(row=0, column=1, padx=(0, 12))
+        ttk.Radiobutton(
+            mode_frm, text="Trodes events (zone detection in Trodes)",
+            variable=self.mode_var, value="events",
+            command=self._on_mode_change).grid(row=0, column=2)
+
         # --- Geometry file row ---
-        ttk.Label(frm, text="Track geometry file:").grid(row=0, column=0, sticky="w", **pad)
+        ttk.Label(frm, text="Track geometry file:").grid(row=1, column=0, sticky="w", **pad)
         self.geometry_var = tk.StringVar()
         self.geometry_entry = ttk.Entry(frm, textvariable=self.geometry_var)
-        self.geometry_entry.grid(row=0, column=1, sticky="ew", **pad)
-        ttk.Button(frm, text="Browse...", command=self._browse_geometry).grid(row=0, column=2, **pad)
+        self.geometry_entry.grid(row=1, column=1, sticky="ew", **pad)
+        self.browse_btn = ttk.Button(frm, text="Browse...", command=self._browse_geometry)
+        self.browse_btn.grid(row=1, column=2, **pad)
 
         # --- Width / height row ---
         dims = ttk.Frame(frm)
-        dims.grid(row=1, column=0, columnspan=3, sticky="w", **pad)
+        dims.grid(row=2, column=0, columnspan=3, sticky="w", **pad)
         ttk.Label(dims, text="Camera width (px):").grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.width_var = tk.StringVar()
-        ttk.Entry(dims, textvariable=self.width_var, width=10).grid(row=0, column=1, padx=(0, 20))
+        self.width_entry = ttk.Entry(dims, textvariable=self.width_var, width=10)
+        self.width_entry.grid(row=0, column=1, padx=(0, 20))
         ttk.Label(dims, text="Camera height (px):").grid(row=0, column=2, sticky="w", padx=(0, 6))
         self.height_var = tk.StringVar()
-        ttk.Entry(dims, textvariable=self.height_var, width=10).grid(row=0, column=3)
+        self.height_entry = ttk.Entry(dims, textvariable=self.height_var, width=10)
+        self.height_entry.grid(row=0, column=3)
 
         # --- Server (optional) row ---
-        ttk.Label(frm, text="Trodes server (optional):").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Label(frm, text="Trodes server (optional):").grid(row=3, column=0, sticky="w", **pad)
         self.server_var = tk.StringVar(value=trodes_io.DEFAULT_SERVER)
-        ttk.Entry(frm, textvariable=self.server_var).grid(row=2, column=1, sticky="ew", **pad)
+        ttk.Entry(frm, textvariable=self.server_var).grid(row=3, column=1, sticky="ew", **pad)
 
         # --- Start / Stop buttons row ---
         btns = ttk.Frame(frm)
-        btns.grid(row=3, column=0, columnspan=3, sticky="w", **pad)
+        btns.grid(row=4, column=0, columnspan=3, sticky="w", **pad)
         self.start_btn = ttk.Button(btns, text="Start", command=self._start)
         self.start_btn.grid(row=0, column=0, padx=(0, 8))
         self.stop_btn = ttk.Button(btns, text="Stop", command=self._stop, state="disabled")
@@ -148,13 +181,25 @@ class HexTrackerGUI:
         # --- Status label ---
         self.status_var = tk.StringVar(value="Idle.")
         ttk.Label(frm, textvariable=self.status_var, foreground="#555").grid(
-            row=4, column=0, columnspan=3, sticky="w", padx=8)
+            row=5, column=0, columnspan=3, sticky="w", padx=8)
 
         # --- Output box ---
-        ttk.Label(frm, text="Output:").grid(row=5, column=0, sticky="w", padx=8, pady=(8, 0))
+        ttk.Label(frm, text="Output:").grid(row=6, column=0, sticky="w", padx=8, pady=(8, 0))
         self.output = scrolledtext.ScrolledText(frm, height=18, wrap="word", state="disabled")
-        self.output.grid(row=6, column=0, columnspan=3, sticky="nsew", padx=8, pady=(0, 8))
-        frm.rowconfigure(6, weight=1)
+        self.output.grid(row=7, column=0, columnspan=3, sticky="nsew", padx=8, pady=(0, 8))
+        frm.rowconfigure(7, weight=1)
+
+        # Grey out the position-only inputs if the initial mode is events.
+        self._on_mode_change()
+
+    # --- Mode switching ---
+    def _on_mode_change(self):
+        """Enable/disable the position-only inputs to match the chosen mode."""
+        events_mode = self.mode_var.get() == "events"
+        state = "disabled" if events_mode else "normal"
+        for widget in (self.geometry_entry, self.browse_btn,
+                       self.width_entry, self.height_entry):
+            widget.config(state=state)
 
     # --- File picker ---
     def _browse_geometry(self):
@@ -169,22 +214,29 @@ class HexTrackerGUI:
         if self.process is not None:
             return  # already running
 
-        errors = validate_inputs(
-            self.geometry_var.get().strip(),
-            self.width_var.get().strip(),
-            self.height_var.get().strip(),
-        )
-        if errors:
-            messagebox.showerror("Please fix these", "\n\n".join(errors))
-            return
+        events_mode = self.mode_var.get() == "events"
 
-        cmd = build_command(
-            sys.executable,
-            self.geometry_var.get().strip(),
-            self.width_var.get().strip(),
-            self.height_var.get().strip(),
-            self.server_var.get().strip(),
-        )
+        if events_mode:
+            # The event listener only needs the server address; zone detection
+            # happens inside Trodes, so no geometry or resolution is required.
+            cmd = build_events_command(sys.executable, self.server_var.get().strip())
+        else:
+            errors = validate_inputs(
+                self.geometry_var.get().strip(),
+                self.width_var.get().strip(),
+                self.height_var.get().strip(),
+            )
+            if errors:
+                messagebox.showerror("Please fix these", "\n\n".join(errors))
+                return
+
+            cmd = build_command(
+                sys.executable,
+                self.geometry_var.get().strip(),
+                self.width_var.get().strip(),
+                self.height_var.get().strip(),
+                self.server_var.get().strip(),
+            )
 
         self._append(f"$ {' '.join(cmd)}\n\n")
         try:
@@ -204,7 +256,10 @@ class HexTrackerGUI:
 
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        self.status_var.set("Running... (waiting for position data from Trodes)")
+        if events_mode:
+            self.status_var.set("Running... (waiting for events from Trodes)")
+        else:
+            self.status_var.set("Running... (waiting for position data from Trodes)")
 
         # Reader thread: pushes each output line onto the queue.
         threading.Thread(target=self._reader_thread, args=(self.process,), daemon=True).start()

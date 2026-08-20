@@ -8,10 +8,17 @@ shape) in one place.
 """
 
 import time
+from datetime import datetime
 
 from trodesnetwork.socket import SourceSubscriber
 
 DEFAULT_SERVER = "tcp://127.0.0.1:49152"
+
+# The Trodes event bus: events sent to 'trodes.event.inbox' (e.g. by Camera
+# Module zones) are relayed onto 'trodes.event' (see trodesnetwork's
+# EventServer / EventSubscription). Some builds also expose 'trodes.events'
+# (plural, used by TrodesEventSubscriber), so callers can override the channel.
+DEFAULT_EVENT_CHANNEL = "trodes.event"
 
 
 # ----------------------------------------------------------------------------
@@ -35,9 +42,13 @@ def iter_positions(server=DEFAULT_SERVER):
     return iter_messages("source.position", server)
 
 
-def iter_events(server=DEFAULT_SERVER):
-    """Yield raw messages from ``source.event``."""
-    return iter_messages("source.event", server)
+def iter_events(server=DEFAULT_SERVER, channel=DEFAULT_EVENT_CHANNEL):
+    """Yield raw messages from the Trodes event bus (default ``trodes.event``).
+
+    Pass ``channel`` to override in case a given Trodes build publishes its
+    events elsewhere (e.g. ``trodes.events``).
+    """
+    return iter_messages(channel, server)
 
 
 # ----------------------------------------------------------------------------
@@ -59,6 +70,17 @@ def extract_xy(msg):
                 return float(x), float(y)
             except ValueError:
                 return None
+    return None
+
+
+# ----------------------------------------------------------------------------
+# Pulling the name out of a Trodes event message (defensive about its shape)
+# ----------------------------------------------------------------------------
+
+def extract_event_name(msg):
+    """Return the event's ``name`` string, or ``None`` if the message has none."""
+    if isinstance(msg, dict) and msg.get("name") is not None:
+        return str(msg["name"])
     return None
 
 
@@ -121,3 +143,8 @@ def now_unix_ns():
     systemTimestamp. For neural alignment, use the MCU sample count instead.
     """
     return time.time_ns()
+
+
+def format_unix_ns(unix_ns):
+    """Human-readable local time (to microseconds) for a Unix nanosecond value."""
+    return datetime.fromtimestamp(unix_ns / 1e9).strftime("%Y-%m-%d %H:%M:%S.%f")

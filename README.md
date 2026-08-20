@@ -1,19 +1,24 @@
 # trodes-tracker
 
 Real-time tools for reading the [Trodes](https://spikegadgets.com/trodes/)
-network during behavioral experiments:
+network during behavioral experiments, with two operating modes:
 
-- **Position / hexagon tracking** — subscribe to the tracked animal position
-  (`source.position`), normalize the pixel coordinates against the camera
-  resolution, and report which hexagon (zone) of a `.trackgeometry` file the
-  animal is in, in real time. Available as a CLI and a desktop GUI.
-- **Event reading** — a standalone listener that prints Trodes events
-  (`source.event`) as they happen.
+- **Position / hexagon tracking (local zone detection)** — subscribe to the
+  tracked animal position (`source.position`), normalize the pixel coordinates
+  against the camera resolution, and report which hexagon (zone) of a
+  `.trackgeometry` file the animal is in, in real time. Available as a CLI and
+  a desktop GUI.
+- **Trodes events (zone detection in Trodes)** — just listen to the Trodes
+  event bus (`trodes.event`). Zone detection happens inside the Trodes Camera
+  Module: zones configured there fire named events when the animal crosses
+  them, and this listener prints each one as it happens.
 
-It does **not** use the Trodes `EventHandler` for position; like
+In position mode it does **not** use the Trodes `EventHandler`; like
 [LorenFrankLab/fsgui](https://github.com/LorenFrankLab/fsgui), it subscribes to
 `source.position` directly and does point-in-polygon tests locally with
-[shapely](https://shapely.readthedocs.io/).
+[shapely](https://shapely.readthedocs.io/). Events mode is the complementary
+approach: let Trodes do the zone detection and only subscribe to the resulting
+events.
 
 ## Layout
 
@@ -23,7 +28,7 @@ trodes_tracker/
 ├── trodes_io.py   # thin wrappers over trodesnetwork (position + event streams)
 ├── tracker.py     # core position-tracking loop (importable, no CLI/GUI deps)
 ├── cli.py         # command-line front-end for the tracker
-├── events.py      # standalone source.event listener
+├── events.py      # trodes.event listener (zone detection in Trodes)
 ├── gui.py         # Tkinter desktop front-end that drives the tracker
 └── __main__.py    # `python -m trodes_tracker` launches the GUI
 environment.yml    # conda environment
@@ -48,8 +53,9 @@ This does an editable install of the project, which pulls in `trodesnetwork`,
 
 ## Usage
 
-The position stream from Trodes is in **pixels**, so you must pass the camera
-resolution (Trodes' `-resolutionx` / `-resolutiony`).
+For **position mode**, the position stream from Trodes is in **pixels**, so you
+must pass the camera resolution (Trodes' `-resolutionx` / `-resolutiony`).
+Events mode needs neither the resolution nor a geometry file.
 
 ### Position / hexagon tracker (CLI)
 
@@ -88,22 +94,51 @@ sample=1000  recv=2026-06-10 15:36:05.534305 (unix_ns=1781130965534304784) | x=3
   so do not use them as the neural-alignment key. The startup banner reports
   which one is in use.
 
-### Position / hexagon tracker (GUI)
+### Desktop GUI (either mode)
 
 ```bash
 hex-tracker-gui
 # or:  python -m trodes_tracker
 ```
 
-Pick a `.trackgeometry` file, enter the camera width/height, and click **Start**.
+Pick a mode with the radio buttons at the top:
 
-> If it hangs on "not available yet", the Trodes Camera Module isn't publishing
-> position — open it and press **Track**.
+- **Position tracker (local zone detection)** — pick a `.trackgeometry` file,
+  enter the camera width/height, and click **Start**.
+- **Trodes events (zone detection in Trodes)** — the geometry and width/height
+  fields grey out (they aren't used); just click **Start** to stream events.
 
-### Event listener
+> If it hangs on "not available yet": in position mode the Camera Module isn't
+> publishing position — open it and press **Track**. In events mode nothing is
+> publishing the event bus — make sure Trodes is running and the Camera Module
+> has zones configured so zone events fire.
+
+### Event listener (zone detection in Trodes)
+
+Configure zones in the Trodes **Camera Module** so they fire named events, then:
 
 ```bash
 trodes-events
 trodes-events --server tcp://127.0.0.1:49152
 # or:  python -m trodes_tracker.events
+```
+
+Every event on the bus is printed (zone events are recognizable by the names
+you gave the zones):
+
+```
+sample=48123  tsys=2026-08-20 15:36:05.534305 (unix_ns=1755713765534304784) | event: reward_zone_1
+```
+
+- **`sample`** — the event's `localTimestamp`: the same MCU hardware sample
+  count described above, i.e. the key for aligning events with neural data.
+- **`tsys`** — the event's `systemTimestamp` (the recording computer's
+  wall-clock, Unix ns), for human reading only; falls back to `recv` (this
+  client's clock) if a message doesn't carry it.
+
+If the listener connects but no events ever arrive, your Trodes build may
+publish them on a different channel — try:
+
+```bash
+trodes-events --channel trodes.events
 ```
