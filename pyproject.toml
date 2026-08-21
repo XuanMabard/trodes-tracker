@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 hex-tracker = "trodes_tracker.cli:main"
+hex-centroid = "trodes_tracker.centroid:main"
 hex-tracker-gui = "trodes_tracker.gui:main"
 trodes-events = "trodes_tracker.events:main"
 

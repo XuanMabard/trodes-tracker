@@ -1,13 +1,17 @@
 # trodes-tracker
 
 Real-time tools for reading the [Trodes](https://spikegadgets.com/trodes/)
-network during behavioral experiments, with two operating modes:
+network during behavioral experiments, with three operating modes:
 
 - **Position / hexagon tracking (local zone detection)** — subscribe to the
   tracked animal position (`source.position`), normalize the pixel coordinates
   against the camera resolution, and report which hexagon (zone) of a
   `.trackgeometry` file the animal is in, in real time. Available as a CLI and
   a desktop GUI.
+- **Hex assignment by nearest centroid** — subscribe to the same position
+  stream, but assign the animal to the hex whose centroid (from a `hex,x,y`
+  CSV in raw camera pixels) is closest, with a pixel distance threshold —
+  positions farther than the threshold from every centroid report as outside.
 - **Trodes events (zone detection in Trodes)** — just listen to the Trodes
   event bus (`trodes.event`). Zone detection happens inside the Trodes Camera
   Module: zones configured there fire named events when the animal crosses
@@ -28,6 +32,7 @@ trodes_tracker/
 ├── trodes_io.py   # thin wrappers over trodesnetwork (position + event streams)
 ├── tracker.py     # core position-tracking loop (importable, no CLI/GUI deps)
 ├── cli.py         # command-line front-end for the tracker
+├── centroid.py    # nearest-centroid hex assignment (CSV + loop + CLI)
 ├── events.py      # trodes.event listener (zone detection in Trodes)
 ├── gui.py         # Tkinter desktop front-end that drives the tracker
 └── __main__.py    # `python -m trodes_tracker` launches the GUI
@@ -48,14 +53,16 @@ conda activate trodes-events
 ```
 
 This does an editable install of the project, which pulls in `trodesnetwork`,
-`pyzmq`, `msgpack`, and `shapely`, and installs three console scripts:
-`hex-tracker`, `hex-tracker-gui`, and `trodes-events`.
+`pyzmq`, `msgpack`, and `shapely`, and installs four console scripts:
+`hex-tracker`, `hex-centroid`, `hex-tracker-gui`, and `trodes-events`.
 
 ## Usage
 
 For **position mode**, the position stream from Trodes is in **pixels**, so you
-must pass the camera resolution (Trodes' `-resolutionx` / `-resolutiony`).
-Events mode needs neither the resolution nor a geometry file.
+must pass the camera resolution (Trodes' `-resolutionx` / `-resolutiony`) to
+normalize against the 0-1 `.trackgeometry` vertices. **Centroid mode** compares
+pixels to pixels directly, so it needs no resolution. **Events mode** needs
+neither a file nor the resolution.
 
 ### Position / hexagon tracker (CLI)
 
@@ -94,19 +101,56 @@ sample=1000  recv=2026-06-10 15:36:05.534305 (unix_ns=1781130965534304784) | x=3
   so do not use them as the neural-alignment key. The startup banner reports
   which one is in use.
 
-### Desktop GUI (either mode)
+### Hex centroid tracker (CLI)
+
+The centroid file is a CSV with a header row and one row per hex; `x`,`y` are
+**raw camera pixels** (same space as the Trodes position stream):
+
+```
+hex,x,y
+3,716,90
+48,714,163
+33,644,200
+...
+```
+
+The pixel distance threshold is **required** — positions farther than this
+from every centroid are reported as outside all hexes:
+
+```bash
+hex-centroid hex_coordinates.csv --threshold 40
+
+# custom Trodes server, short flag:
+hex-centroid hex_coordinates.csv -t 40 --server tcp://127.0.0.1:49152
+
+# or, without installing, from the project root:
+python -m trodes_tracker.centroid hex_coordinates.csv -t 40
+```
+
+Each line shows the assigned hex and the distance to its centroid (timestamps
+mean the same as in the position tracker above):
+
+```
+sample=1000  recv=2026-08-20 15:36:05.534305 (unix_ns=1787249405507957599) | x=707.00 y=395.00   -->   hexagon 29 (dist=12.3px)
+sample=1030  recv=2026-08-20 15:36:05.567638 (unix_ns=1787249405541290932) | x=200.00 y=100.00   -->   outside all hexes (nearest hexagon 3 at 516.1px)
+```
+
+### Desktop GUI (any mode)
 
 ```bash
 hex-tracker-gui
 # or:  python -m trodes_tracker
 ```
 
-Pick a mode with the radio buttons at the top:
+Pick a mode with the radio buttons at the top — each mode's unused inputs grey
+out:
 
 - **Position tracker (local zone detection)** — pick a `.trackgeometry` file,
   enter the camera width/height, and click **Start**.
-- **Trodes events (zone detection in Trodes)** — the geometry and width/height
-  fields grey out (they aren't used); just click **Start** to stream events.
+- **Hex assignment by nearest centroid** — pick the hex centroid CSV, enter
+  the distance threshold in pixels, and click **Start**.
+- **Trodes events (zone detection in Trodes)** — no inputs needed; just click
+  **Start** to stream events.
 
 > If it hangs on "not available yet": in position mode the Camera Module isn't
 > publishing position — open it and press **Track**. In events mode nothing is

@@ -8,19 +8,24 @@ It lets you:
   - Pick a mode:
       * Position tracker -- stream x,y positions and do zone detection locally
         with shapely against a .trackgeometry file
+      * Hex centroid -- stream x,y positions and assign the animal to the hex
+        with the nearest centroid (from a hex,x,y CSV in raw pixels), with a
+        pixel distance threshold for "outside"
       * Trodes events -- just listen to the Trodes event bus; zone detection
         happens inside the Trodes Camera Module (zones configured there fire
         named events)
   - Load a .trackgeometry file with a file picker (position mode only)
   - Type the camera width and height in pixels (position mode only)
+  - Load a hex centroid CSV and type a distance threshold (centroid mode only)
   - Click "Start" to run the chosen mode and watch its output live
   - Click "Stop" to end it
 
 The GUI launches the worker as a separate process -- ``python -m
-trodes_tracker.cli`` or ``python -m trodes_tracker.events`` using the same
-interpreter the GUI is running under, so it stays inside your conda
-environment -- and streams whatever the worker prints. Running it
-out-of-process keeps the GUI responsive and lets "Stop" cleanly terminate it.
+trodes_tracker.cli``, ``python -m trodes_tracker.centroid``, or ``python -m
+trodes_tracker.events`` using the same interpreter the GUI is running under,
+so it stays inside your conda environment -- and streams whatever the worker
+prints. Running it out-of-process keeps the GUI responsive and lets "Stop"
+cleanly terminate it.
 
 Run it with:
     python -m trodes_tracker            # this GUI (see __main__.py)
@@ -95,6 +100,38 @@ def build_events_command(python_exe, server):
     return cmd
 
 
+def validate_centroid_inputs(centroid_path, threshold_str):
+    """Return a list of human-readable error strings (empty == all good)."""
+    errors = []
+
+    if not centroid_path:
+        errors.append("Please choose a hex centroid CSV file.")
+    elif not os.path.isfile(centroid_path):
+        errors.append(f"Centroid file not found:\n{centroid_path}")
+
+    try:
+        if float(threshold_str) <= 0:
+            errors.append("Distance threshold must be a positive number.")
+    except (TypeError, ValueError):
+        errors.append(
+            f"Distance threshold must be a number (got {threshold_str!r}).")
+
+    return errors
+
+
+def build_centroid_command(python_exe, centroid_path, threshold, server):
+    """Assemble the command line that runs the centroid tracker module,
+    unbuffered (-u) so its output streams line-by-line into the GUI."""
+    cmd = [
+        python_exe, "-u", "-m", "trodes_tracker.centroid",
+        centroid_path,
+        "-t", str(threshold),
+    ]
+    if server:
+        cmd += ["--server", server]
+    return cmd
+
+
 def subprocess_env():
     """Environment for the tracker subprocess, with the project root on
     PYTHONPATH so ``-m trodes_tracker.cli`` resolves even when the package
@@ -114,7 +151,7 @@ class HexTrackerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Hex Position Tracker")
-        self.root.geometry("760x560")
+        self.root.geometry("760x680")
 
         self.process = None             # the running subprocess, if any
         self.output_queue = queue.Queue()
@@ -130,19 +167,23 @@ class HexTrackerGUI:
         frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
 
-        # --- Mode row ---
+        # --- Mode rows ---
         self.mode_var = tk.StringVar(value="position")
         mode_frm = ttk.Frame(frm)
         mode_frm.grid(row=0, column=0, columnspan=3, sticky="w", **pad)
-        ttk.Label(mode_frm, text="Mode:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(mode_frm, text="Mode:").grid(row=0, column=0, sticky="nw", padx=(0, 6))
         ttk.Radiobutton(
-            mode_frm, text="Position tracker (local zone detection)",
+            mode_frm, text="Position tracker (shapely zones from .trackgeometry)",
             variable=self.mode_var, value="position",
-            command=self._on_mode_change).grid(row=0, column=1, padx=(0, 12))
+            command=self._on_mode_change).grid(row=0, column=1, sticky="w")
+        ttk.Radiobutton(
+            mode_frm, text="Hex assignment by nearest centroid (hex,x,y CSV)",
+            variable=self.mode_var, value="centroid",
+            command=self._on_mode_change).grid(row=1, column=1, sticky="w")
         ttk.Radiobutton(
             mode_frm, text="Trodes events (zone detection in Trodes)",
             variable=self.mode_var, value="events",
-            command=self._on_mode_change).grid(row=0, column=2)
+            command=self._on_mode_change).grid(row=2, column=1, sticky="w")
 
         # --- Geometry file row ---
         ttk.Label(frm, text="Track geometry file:").grid(row=1, column=0, sticky="w", **pad)
@@ -164,14 +205,30 @@ class HexTrackerGUI:
         self.height_entry = ttk.Entry(dims, textvariable=self.height_var, width=10)
         self.height_entry.grid(row=0, column=3)
 
+        # --- Hex centroid file row (centroid mode) ---
+        ttk.Label(frm, text="Hex centroid file:").grid(row=3, column=0, sticky="w", **pad)
+        self.centroid_var = tk.StringVar()
+        self.centroid_entry = ttk.Entry(frm, textvariable=self.centroid_var)
+        self.centroid_entry.grid(row=3, column=1, sticky="ew", **pad)
+        self.centroid_browse_btn = ttk.Button(frm, text="Browse...", command=self._browse_centroids)
+        self.centroid_browse_btn.grid(row=3, column=2, **pad)
+
+        # --- Distance threshold row (centroid mode) ---
+        thr = ttk.Frame(frm)
+        thr.grid(row=4, column=0, columnspan=3, sticky="w", **pad)
+        ttk.Label(thr, text="Distance threshold (px):").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.threshold_var = tk.StringVar()
+        self.threshold_entry = ttk.Entry(thr, textvariable=self.threshold_var, width=10)
+        self.threshold_entry.grid(row=0, column=1)
+
         # --- Server (optional) row ---
-        ttk.Label(frm, text="Trodes server (optional):").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Label(frm, text="Trodes server (optional):").grid(row=5, column=0, sticky="w", **pad)
         self.server_var = tk.StringVar(value=trodes_io.DEFAULT_SERVER)
-        ttk.Entry(frm, textvariable=self.server_var).grid(row=3, column=1, sticky="ew", **pad)
+        ttk.Entry(frm, textvariable=self.server_var).grid(row=5, column=1, sticky="ew", **pad)
 
         # --- Start / Stop buttons row ---
         btns = ttk.Frame(frm)
-        btns.grid(row=4, column=0, columnspan=3, sticky="w", **pad)
+        btns.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
         self.start_btn = ttk.Button(btns, text="Start", command=self._start)
         self.start_btn.grid(row=0, column=0, padx=(0, 8))
         self.stop_btn = ttk.Button(btns, text="Stop", command=self._stop, state="disabled")
@@ -181,27 +238,33 @@ class HexTrackerGUI:
         # --- Status label ---
         self.status_var = tk.StringVar(value="Idle.")
         ttk.Label(frm, textvariable=self.status_var, foreground="#555").grid(
-            row=5, column=0, columnspan=3, sticky="w", padx=8)
+            row=7, column=0, columnspan=3, sticky="w", padx=8)
 
         # --- Output box ---
-        ttk.Label(frm, text="Output:").grid(row=6, column=0, sticky="w", padx=8, pady=(8, 0))
+        ttk.Label(frm, text="Output:").grid(row=8, column=0, sticky="w", padx=8, pady=(8, 0))
         self.output = scrolledtext.ScrolledText(frm, height=18, wrap="word", state="disabled")
-        self.output.grid(row=7, column=0, columnspan=3, sticky="nsew", padx=8, pady=(0, 8))
-        frm.rowconfigure(7, weight=1)
+        self.output.grid(row=9, column=0, columnspan=3, sticky="nsew", padx=8, pady=(0, 8))
+        frm.rowconfigure(9, weight=1)
 
         # Grey out the position-only inputs if the initial mode is events.
         self._on_mode_change()
 
     # --- Mode switching ---
     def _on_mode_change(self):
-        """Enable/disable the position-only inputs to match the chosen mode."""
-        events_mode = self.mode_var.get() == "events"
-        state = "disabled" if events_mode else "normal"
-        for widget in (self.geometry_entry, self.browse_btn,
-                       self.width_entry, self.height_entry):
-            widget.config(state=state)
+        """Enable/disable the per-mode inputs to match the chosen mode."""
+        mode = self.mode_var.get()
 
-    # --- File picker ---
+        def set_state(widgets, enabled):
+            state = "normal" if enabled else "disabled"
+            for widget in widgets:
+                widget.config(state=state)
+
+        set_state((self.geometry_entry, self.browse_btn,
+                   self.width_entry, self.height_entry), mode == "position")
+        set_state((self.centroid_entry, self.centroid_browse_btn,
+                   self.threshold_entry), mode == "centroid")
+
+    # --- File pickers ---
     def _browse_geometry(self):
         path = filedialog.askopenfilename(
             title="Select a track geometry file",
@@ -209,17 +272,39 @@ class HexTrackerGUI:
         if path:
             self.geometry_var.set(path)
 
+    def _browse_centroids(self):
+        path = filedialog.askopenfilename(
+            title="Select a hex centroid CSV file",
+            filetypes=[("Hex centroids (CSV)", "*.csv"), ("All files", "*.*")])
+        if path:
+            self.centroid_var.set(path)
+
     # --- Start / stop ---
     def _start(self):
         if self.process is not None:
             return  # already running
 
-        events_mode = self.mode_var.get() == "events"
+        mode = self.mode_var.get()
 
-        if events_mode:
+        if mode == "events":
             # The event listener only needs the server address; zone detection
             # happens inside Trodes, so no geometry or resolution is required.
             cmd = build_events_command(sys.executable, self.server_var.get().strip())
+        elif mode == "centroid":
+            errors = validate_centroid_inputs(
+                self.centroid_var.get().strip(),
+                self.threshold_var.get().strip(),
+            )
+            if errors:
+                messagebox.showerror("Please fix these", "\n\n".join(errors))
+                return
+
+            cmd = build_centroid_command(
+                sys.executable,
+                self.centroid_var.get().strip(),
+                self.threshold_var.get().strip(),
+                self.server_var.get().strip(),
+            )
         else:
             errors = validate_inputs(
                 self.geometry_var.get().strip(),
@@ -256,7 +341,7 @@ class HexTrackerGUI:
 
         self.start_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
-        if events_mode:
+        if mode == "events":
             self.status_var.set("Running... (waiting for events from Trodes)")
         else:
             self.status_var.set("Running... (waiting for position data from Trodes)")
